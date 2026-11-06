@@ -1,19 +1,19 @@
-﻿# Changelog
+# Changelog
 
-## 0.1.1 鈥?2026-11-06
+## 0.1.1 — 2026-11-06
 
 ### Added
 
 - `LICENSE` (MIT, copyright `2026 Hcnuooun`) and License sections in both READMEs.
 - Ready-to-push git repository layout (`.gitignore` for caches and captures).
 
-## 0.1.0 鈥?2026-11-06
+## 0.1.0 — 2026-11-06
 
 First public shape, distilled from a working STM32H743 + LVGL + LTDC project.
 
 ### Added
 
-- `SKILL.md`: operating rules, the six-step hardware loop, a symptom 鈫?first-probe table, the
+- `SKILL.md`: operating rules, the six-step hardware loop, a symptom → first-probe table, the
   display scan-out budget in one page, the expensive pitfalls, a definition of done.
 - `references/protocol.md`: read-first working agreement, evidence rules, one-change-per-iteration,
   no hidden special cases, handover discipline, when to stop and ask.
