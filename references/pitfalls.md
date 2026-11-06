@@ -174,3 +174,25 @@ the timer's prescaler.
 
 **Fix.** Record the units next to every number, and validate one known interval end-to-end (e.g. a
 1 s sleep must produce 1 s of ticks).
+
+## 16. UI freezes while the plot keeps animating (bottom-edge dirty box)
+
+**Symptom.** The waveform/curve still updates every frame, but the side panel, tables and axis text
+stop changing. The LVGL flush counter is frozen; a "deferred draws" counter climbs steadily. It never
+recovers by itself.
+
+**Cause.** The safe-window function only considered the case "the beam has already passed the box".
+A dirty rectangle pinned to the bottom of the screen (`y2 = 479` on a 480-row panel) then has only
+`H_total - (box_bottom + margin) ≈ 10` lines per frame in which it may be drawn. The main loop spends
+that slice painting the waveform, so the box is never drawn — and a pending invalidation is never
+dropped, so every later update joins its bounding box. The starvation failsafe did not help because
+it was written as `if (beam_passed) wait++`, i.e. gated on exactly the condition that never became
+true.
+
+**Fix.** Compute the window on both sides of the box (`after` and `before`) and take the larger;
+count the failsafe whenever the area is dirty, not only after the beam passed; when `need` exceeds
+any achievable window, draw at the first non-zero window and accept the tear.
+
+**Catch it next time.** Read `disp->inv_p` and `inv_areas[0]` over the probe while the UI is stuck.
+One dirty rect touching a screen edge plus a frozen flush counter is this bug. Also: a failsafe that
+shares a condition with the thing it is protecting you from is not a failsafe.

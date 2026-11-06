@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.2 — 2026-11-06
+
+### Fixed
+
+- The scan-out window rule now covers **both** sides of the dirty box (beam already passed / beam has
+  not arrived yet). Budgeting only the "after" side starves a box pinned to the bottom edge.
+- The starvation failsafe must count whenever the area is dirty, not only after the beam passed —
+  otherwise it shares the failing condition and never fires.
+- Added pitfall #16 with the real failure signature (plot animating, text frozen, one bottom-edge
+  dirty rect) and the probe reads that identify it.
+
 ## 0.1.1 — 2026-11-06
 
 ### Added

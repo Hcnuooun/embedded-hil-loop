@@ -109,11 +109,16 @@ budget_needed  = dirty_rows * k + c                     # k, c measured, not gue
 
 Rules that came out of real bugs:
 
-* Compute the maximum achievable window at the **earliest legal start** (`y = box_bottom + margin + 1`),
-  never at `y = box_bottom + 1`. The few-line difference is enough to deadlock a draw forever.
+* Consider **both** windows: the beam already passed the box (`(H_total - y) + (box_top - margin)`)
+  and the beam has not reached it yet (`(box_top - margin) - y`). Take the larger one. Budgeting only
+  the "already passed" side starves a box pinned to the bottom edge: its after-window is ten lines
+  per frame while its before-window is hundreds.
+* Compute the maximum achievable window at a *legal* start, never at `y = box_bottom + 1`; the
+  few-line difference is enough to deadlock a draw forever.
 * Overestimating the budget is not "safe": it shrinks the legal start window until nothing qualifies.
   Calibrate `k`/`c` from measured draws, then keep ~25 % headroom.
-* Failsafes must count **frames**, not loop iterations. A tight `App_Loop` runs every few
+* Failsafes must count **frames**, not loop iterations, and must count whenever the area is dirty —
+  never behind the same condition that is currently failing. A tight `App_Loop` runs every few
   microseconds, so "8 iterations" is a fraction of a millisecond and forces a draw on the beam.
 * Full-page changes: split into bands (60–120 rows), invalidate one band at a time, and advance only
   after the previous band was actually drawn. Suppress other invalidation sources during the wipe,

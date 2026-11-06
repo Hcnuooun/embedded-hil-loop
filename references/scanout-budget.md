@@ -16,15 +16,26 @@ frame_time  = V_total * line_time       # e.g. 528 * 29.28 us  = 15.455 ms  (64.
 
 The active area starts at line `V_offset` (`VSW + VBP`), so **screen row y is panel line y + V_offset**.
 
-A draw is safe when the scan line is outside the dirty rectangle. Once the line has passed the
-rectangle, the beam must wrap around the frame and come back to the rectangle's top:
+A draw is safe when the scan line is outside the dirty rectangle — on **either** side of it. Both
+windows count, and the larger one is the one you budget against:
 
 ```
-safe_window_lines(y) = (H_total - y_ltcd) + (box_top_ltcd - margin)    # only if y_ltcd > box_bottom + margin
-safe_window_time     = safe_window_lines * line_time
+# the beam has already passed the box: it must wrap and come back to the box top
+after(y)  = (H_total - y_ltcd) + (box_top_ltcd - margin)     # only if y_ltcd > box_bottom + margin
+
+# the beam has not reached the box yet: it will arrive at the box top
+before(y) = (box_top_ltcd - margin) - y_ltcd                 # only if y_ltcd + margin < box_top_ltcd
+
+safe_window_lines = max(after, before)                       # 0 while the beam is inside/next to the box
+safe_window_time  = safe_window_lines * line_time
 ```
 
 `margin` covers the loop's own latency between deciding and starting to write (2–4 lines is typical).
+
+**Why the `before` side matters more than it looks.** A box pinned to the bottom of the screen
+(e.g. a status/tab strip at y 400..479) has almost no `after` window — only `H_total - (box_bottom +
+margin)` ≈ 10 lines — but a `before` window of `box_top - margin` ≈ 430 lines. Budgeting only the
+`after` side forces every repaint of that strip into a 300 µs slot and it starves; see §3.
 
 ## 2. Budget calibration (measure, do not guess)
 
@@ -40,7 +51,9 @@ real draws on the board (divide the measured µs by `line_time`):
 A usable fit was `k = 1.25`, `c = 100` lines (≈2.9 ms + 0.037 ms/row), about 25 % above the worst
 observed draw. Re-measure on your panel; the constants are hardware- and widget-dependent.
 
-## 3. The deadlock (a real one)
+## 3. The deadlock (two real ones, same shape)
+
+### 3a. The seven-line error
 
 The first version computed the maximum window as `H_total - dirty_rows` — as if a draw could start
 at `y = box_bottom + 1`. The earliest legal start is `box_bottom + margin + 1`, which is `2*margin+1`
@@ -55,13 +68,37 @@ lines. The paint-cost estimator had risen to 162 → `need = 164`. Result: `need
 The waveform never repainted again (the panel kept drawing it with LVGL, so the plot looked "frozen"
 while everything else worked), and every later attempt was rejected by the same comparison.
 
-Two fixes, both needed:
+Fixes: compute `hopeless = need > achievable_max` (not `> H_total - rows`); clamp the estimator so it
+cannot exceed that maximum; keep a starvation failsafe.
 
-* compute `hopeless = need > achievable_max` (not `> H_total - rows`);
-* keep a starvation failsafe that forces the draw after **N frames**.
+### 3b. The bottom-edge box (the one that actually froze the whole UI)
 
-A third, smaller one: clamp the estimator. It should never exceed the achievable maximum, or it
-locks itself out.
+After 3a was fixed, the UI still froze intermittently: the plot kept animating, but the panel,
+tables and axis text stopped updating, and the LVGL flush counter did not move at all. On the probe:
+
+```
+inv_p = 1 ; inv_areas[0] = x 0..799, y 395..479     # one dirty rect pinned to the bottom edge
+defer counter growing ~75k/s                        # "dirty but not drawable" every loop pass
+starvation counter = 0                              # the per-frame failsafe never armed
+```
+
+`window_lines()` returned a value only for `y > box_bottom + margin`. For that box (`bot = 479 + 35 =
+514`) that is `y > 517`: **10 lines per frame, 293 µs**. The main loop spends that slice inside the
+waveform paint often enough that the box never got drawn. A dirty rect that is never drawn stays
+pending, so every later invalidation joins its bbox — the union grows upward, the window gets no
+better, and the whole LVGL side stops for good. The failsafe did not save it because it was written
+as `if (past) s_wait++`, and `past` was exactly the condition that never became true.
+
+Fixes:
+
+* `before`/`after` windows (§1) — the box now draws early in the frame with a 400-line window;
+* the per-frame failsafe counts whenever the area is dirty, **not** only when the beam has passed;
+* `need > max_window` draws at any non-zero window (it will tear, but it cannot stall);
+* banded wipes stop forcing "draw anywhere" (an 80-row band always has a 200+ line window, so it can
+  wait for a clean one).
+
+**Signature to recognise it:** plot/animations keep running, text and tables freeze, flush counter
+static, one dirty rect touching a screen edge (top or bottom) in `inv_areas`.
 
 ## 4. Failsafe: count frames, not loop iterations
 
@@ -72,11 +109,13 @@ if (s_wait >= 8) { force_draw = true; s_wait = 0; }
 
 On a fast main loop this is wrong: the loop runs every few microseconds, so 8 iterations is well
 under a millisecond. The force then fires while the beam is inside the rectangle — every single
-draw becomes a tear. Count once per frame instead:
+draw becomes a tear. Count once per frame instead, and count **whenever the area is dirty and
+could not be drawn** — do not make the counter depend on the same condition that is failing:
 
 ```c
 uint32_t fr = frame_counter();
-if (past && s_wait_frame != fr) { s_wait_frame = fr; s_wait++; }
+if (!drawn && s_wait_frame != fr) { s_wait_frame = fr; s_wait++; }
+if (!drawn && s_wait >= 8) { force_draw = true; s_wait = 0; }
 ```
 
 With a per-frame counter, a healthy draw passes the window check long before 8 frames and the
